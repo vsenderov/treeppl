@@ -390,6 +390,7 @@ function evolveMessageClosure ( dyn: ModelDynamics
                               ): MessageEvolution
 {
   assume sJumps ~ Poisson(dyn.nu * t * u); // divided by number of nucleotides
+  //let sJumps = directPoisson(dyn.nu * t * u);
   // Missing data case
   let myScalar = mtxGet(1, 1, mes);
   if (myScalar < 0.) { // we will skip the linear algebra if the message is missing
@@ -405,6 +406,7 @@ function evolveMessageClosure ( dyn: ModelDynamics
     sJumps = sJumps
   };
 }
+
 
 
 function evolveCharacter(mes: Tensor[Real], m: ModelDynamics, t: Real, sJumps: Int): Tensor[Real]

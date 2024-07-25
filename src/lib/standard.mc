@@ -370,3 +370,11 @@ utest tensorToSeqExn (tensorSliceExn (get __test_messageElemPow 0) [0]) with [4.
 
 utest tensorToSeqExn (tensorSliceExn (get __test_messageElemPow 1) [0]) with [16., 25.]
   using (eqSeq eqf)
+
+
+
+----------------
+--- Direct Distributions ---
+----------------
+
+let directPoisson = poissonSample -- used to bypass CPPL analysis
