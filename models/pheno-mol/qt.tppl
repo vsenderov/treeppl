@@ -59,6 +59,7 @@ type ModelDynamics = ModelDynamics  { qChar: Tensor[Real]
                                     , nu: Real
                                     , charMessages: Real[][]
 //                                 , molMessages: Real[][]
+                                    , p: Real
                                     }
 
 type QTParm = QTParm  { lambda: Real // Rate of phenotypic evolution
@@ -122,11 +123,13 @@ model function qtbirds( tree: QTTree
   assume lam ~ Gamma(lamShape, lamScale);
   assume mu ~ Gamma(muShape, muScale);
   assume nu ~ Gamma(nuShape, nuScale); // comment this ...
-  let p = 0.0;                         // and this and ...
+  //let p = 0.0;                         // and this and ...
   
   // and uncomment the following lines, if you want nu to be a mix between
   // 0 and gamma
-  //assume p ~ Beta(pa, pb);
+  assume p ~ Beta(pa, pb);
+  // we could try 
+  // let p = 1.0/Real(length(messages)); // but messages not available here! need to check how to get it from evolveMessageSequence
   //assume rho ~ Bernoulli(p);
   //let nu = gammaZeroMix(rho, nuShape, nuScale);
 
@@ -137,6 +140,7 @@ model function qtbirds( tree: QTTree
                         , qMol = mu $* normQMol
                         , jMol = jMol
                         , nu = nu
+                        , p = p
                         };
 
   let something = coalesceQTTree(tree, m, false); // Outermost call, so no need to resample
@@ -212,32 +216,38 @@ function coalesceQTTree(tree: QTTree, m: ModelDynamics, doresample: Bool) : QTTr
 
 
 /*
- * coalesceQTTwig deals with a subtree that has two leafs as children
+ * coalesceQTTwig deals with a subtree that has two leaves as children
  * (they can be weighted or unweighted)
+ * Twig: two leaves
  */  
 function coalesceQTTwig(tree: QTTree, m: ModelDynamics, doresample: Bool): QTTree {
   let leftTime = getAgeDiff(tree, tree.left);
   let rightTime = getAgeDiff(tree, tree.right);
+  
+  let leftCharacterMessage = getCharacterMessage(tree.left, m.charMessages);
+  let rightCharacterMessage = getCharacterMessage(tree.right, m.charMessages);
+
+  // need to sample the sjumps first
+  assume sJumpsLeft ~ Poisson(m.nu * leftTime);
+  assume sJumpsRight ~ Poisson(m.nu * rightTime);
+
+  let newLeftCharMessage = evolveCharacter( leftCharacterMessage
+                                          , m
+                                          , leftTime
+                                          , sJumpsLeft
+                                          );
+
+  let newRightCharMessage = evolveCharacter ( rightCharacterMessage
+                                            , m
+                                            , rightTime
+                                            , sJumpsRight
+                                            );
 
   let leftMessageSequence = getMessageSequence(tree.left);
   let rightMessageSequence = getMessageSequence(tree.right);
 
-  let leftCharacterMessage = getCharacterMessage(tree.left, m.charMessages);
-  let rightCharacterMessage = getCharacterMessage(tree.right, m.charMessages);
-
-  let leftMessageSequenceEvolution = evolveMessageSequence(leftMessageSequence, m, leftTime);
-  let newLeftMessageSequence = leftMessageSequenceEvolution.messageSequence;  // should work now
-  // ... jumps leftMessageSequenceEvolution.characterJumps
-  // if not, workaround below:
-  ///let newLeftMessageSequence = sapply(leftMessageSequenceEvolution.messageSequence, idTensorReal);     // workaround
-  
-  
-  let rightMessageSequenceEvolution = evolveMessageSequence(rightMessageSequence, m, rightTime);
-  let newRightMessageSequence = rightMessageSequenceEvolution.messageSequence; // should work now
-  // ... jumps rightMessageSequenceEvolution.characterJumps
-  // if not, workaround
-  //let newRightMessageSequence = sapply(rightMessageSequenceEvolution.messageSequence, idTensorReal);
-  
+  let newLeftMessageSequence = evolveMessageSequence(leftMessageSequence, m, leftTime, sJumpsLeft);
+  let newRightMessageSequence = evolveMessageSequence(rightMessageSequence, m, rightTime, sJumpsRight);
 
   // we need to zipWith left and right and element-wise multiply left and right
   // TODO one of the messages may be missing (-1.)
@@ -249,18 +259,6 @@ function coalesceQTTwig(tree: QTTree, m: ModelDynamics, doresample: Bool): QTTre
   //  Still possible to have missing data after the previous operation
   // computeMessageLogLikelihood takes this account
   let logWeightSequence = sapply(newMessageSequence, computeMessageLogLikelihood);
-
-  let newLeftCharMessage = evolveCharacter( leftCharacterMessage
-                                          , m
-                                          , leftTime
-                                          , leftMessageSequenceEvolution.characterJumps
-                                          );
-
-  let newRightCharMessage = evolveCharacter ( rightCharacterMessage
-                                            , m
-                                            , rightTime
-                                            , rightMessageSequenceEvolution.characterJumps
-                                            );
 
   let newCharMessage = mtxElemMul(newLeftCharMessage, newRightCharMessage); // characters are never missing :)
   let logWeightChar = computeMessageLogLikelihood(newCharMessage);
@@ -379,31 +377,32 @@ function meGetJumps (mes: MessageEvolution): Int
 * 
 * @param dyn: ModelDynamics
 * @param t: Real  Time of evolution
+* @param n: number of sjumps
 * @param mes: Tensor[Real]
 *   The initial likelihood as a row vector
 *   If the mes has negative values, it is considered missing data
 */
 function evolveMessageClosure ( dyn: ModelDynamics
                               , t: Real
-                              , u: Real
+                              , n: Int
                               , mes: Tensor[Real]
-                              ): MessageEvolution
+                              ): Tensor[Real]
 {
-  assume sJumps ~ Poisson(dyn.nu * t * u); // divided by number of nucleotides
   // Missing data case
   let myScalar = mtxGet(1, 1, mes);
   if (myScalar < 0.) { // we will skip the linear algebra if the message is missing
-    return MessageEvolution {
-      message = mes,
-      sJumps = sJumps
-    };
-  }
-  let res = mes *@ ( ( dyn.jMol ^$ sJumps ) *@ (mtxExp(dyn.qMol *$ t)));
-  // TODO do something for operator precedence to avoid so many parens
-  return MessageEvolution {
-    message = res,
-    sJumps = sJumps
-  };
+    return mes;
+    }
+  
+
+  // $$P_mu^(i)(t) = e^(Q t)((1 - p)I + p J)^n$$
+  let idMtx = mtxCreateId(dim(dyn.jMol)[1]);
+  let res = mes *@ (
+                        ( ( ( (1.0 - dyn.p) $* idMtx )  +@ ( dyn.p $* ( dyn.jMol ) ) ) ^$ n) *@ 
+                        (mtxExp(dyn.qMol *$ t))
+                  );
+
+  return mes;
 }
 
 
@@ -427,16 +426,12 @@ type MessageSequenceEvolution = MessageSequenceEvolution {
 function evolveMessageSequence( messages: Tensor[Real][]
                               , m: ModelDynamics
                               , t: Real
-                              ) : MessageSequenceEvolution
+                              , n: Int // number of total sjumps
+                              ) : Tensor[Real][]
 {
-  let u = 1.0/Real(length(messages));
-  let evolveMessage = evolveMessageClosure(m, t, u); // partial application
-  let ret = sapply(messages, evolveMessage);
-
-  return MessageSequenceEvolution {
-    messageSequence = sapply(ret, meGetMessage),  // workaround, projecting from res with explictly defined functions, but would be better with anonymous functions
-    characterJumps = seqSumInt(sapply(ret, meGetJumps))
-  };
+  let evolveMessage = evolveMessageClosure(m, t, n); // partial application
+  let messageSequence = sapply(messages, evolveMessage);
+  return messageSequence;
 }
 
 
