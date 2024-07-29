@@ -143,6 +143,7 @@ model function qtbirds( tree: QTTree
                         , p = p
                         };
 
+
   let something = coalesceQTTree(tree, m, false); // Outermost call, so no need to resample
 
   return [lam, mu, nu, p];
@@ -221,6 +222,7 @@ function coalesceQTTree(tree: QTTree, m: ModelDynamics, doresample: Bool) : QTTr
  * Twig: two leaves
  */  
 function coalesceQTTwig(tree: QTTree, m: ModelDynamics, doresample: Bool): QTTree {
+  printLn("coalesce");
   let leftTime = getAgeDiff(tree, tree.left);
   let rightTime = getAgeDiff(tree, tree.right);
   
@@ -243,11 +245,16 @@ function coalesceQTTwig(tree: QTTree, m: ModelDynamics, doresample: Bool): QTTre
                                             , sJumpsRight
                                             );
 
+  printLn("character done");
+
+
   let leftMessageSequence = getMessageSequence(tree.left);
   let rightMessageSequence = getMessageSequence(tree.right);
 
   let newLeftMessageSequence = evolveMessageSequence(leftMessageSequence, m, leftTime, sJumpsLeft);
   let newRightMessageSequence = evolveMessageSequence(rightMessageSequence, m, rightTime, sJumpsRight);
+
+  printLn("left and right seqs done");
 
   // we need to zipWith left and right and element-wise multiply left and right
   // TODO one of the messages may be missing (-1.)
@@ -255,6 +262,9 @@ function coalesceQTTwig(tree: QTTree, m: ModelDynamics, doresample: Bool): QTTre
                                   , newLeftMessageSequence
                                   , newRightMessageSequence 
                                   ); // ~~TODO check zipWith and implement hadamardMul~~
+
+  printLn("seqs have been multiplied");
+
 
   //  Still possible to have missing data after the previous operation
   // computeMessageLogLikelihood takes this account
@@ -264,6 +274,9 @@ function coalesceQTTwig(tree: QTTree, m: ModelDynamics, doresample: Bool): QTTre
   let logWeightChar = computeMessageLogLikelihood(newCharMessage);
   
   let partialLogWeight = seqSumReal(logWeightSequence) + logWeightChar;
+
+  printLn("weights done");
+
 
   logWeight (partialLogWeight - tree.partialLogWeight);
   
@@ -283,15 +296,21 @@ function coalesceQTTwig(tree: QTTree, m: ModelDynamics, doresample: Bool): QTTre
   //         );
 
   if (doresample) {
+    printLn("resampling");
     resample;
   }
+
+  printLn("Tree params:");
 
   let newTree = QTWeightedLeaf  { age = tree.age
                                 , messageSequence = newMessageSequence
                                 , characterMessage = newCharMessage
                                 , partialLogWeight = partialLogWeight
                                 };
+
+  printLn("coalesce complete");
   return newTree;
+
 }
 
 
@@ -396,7 +415,9 @@ function evolveMessageClosure ( dyn: ModelDynamics
   
 
   // $$P_mu^(i)(t) = e^(Q t)((1 - p)I + p J)^n$$
+  //printLn("let idMtx = mtxCreateId(dim(dyn.jMol)[1]);");
   let idMtx = mtxCreateId(dim(dyn.jMol)[1]);
+  //printLn("past");
   let res = mes *@ (
                         ( ( ( (1.0 - dyn.p) $* idMtx )  +@ ( dyn.p $* ( dyn.jMol ) ) ) ^$ n) *@ 
                         (mtxExp(dyn.qMol *$ t))
