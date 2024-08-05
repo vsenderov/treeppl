@@ -222,39 +222,41 @@ function coalesceQTTree(tree: QTTree, m: ModelDynamics, doresample: Bool) : QTTr
  * Twig: two leaves
  */  
 function coalesceQTTwig(tree: QTTree, m: ModelDynamics, doresample: Bool): QTTree {
-  printLn("coalesce");
-  let leftTime = getAgeDiff(tree, tree.left);
-  let rightTime = getAgeDiff(tree, tree.right);
+  //printLn("coalesceQTTwig:");
+  //printLn("(received) leftTime, rightTime:");
+  let leftTime = getAgeDiff(tree, tree.left); //printLn(real2string(leftTime));
+  let rightTime = getAgeDiff(tree, tree.right); //printLn(real2string(rightTime));
   
-  let leftCharacterMessage = getCharacterMessage(tree.left, m.charMessages);
-  let rightCharacterMessage = getCharacterMessage(tree.right, m.charMessages);
+  //printLn("(received) leftCharacterMessage, rightCharacterMessage:");
+  let leftCharacterMessage = getCharacterMessage(tree.left, m.charMessages); //printMtx(leftCharacterMessage);
+  let rightCharacterMessage = getCharacterMessage(tree.right, m.charMessages); //printMtx(rightCharacterMessage);
 
-  // need to sample the sjumps first
-  assume sJumpsLeft ~ Poisson(m.nu * leftTime);
-  assume sJumpsRight ~ Poisson(m.nu * rightTime);
+  //printLn("(simulated) sJumpsLeft, sJumpsRight:");
+  assume sJumpsLeft ~ Poisson(m.nu * leftTime); //printLn(int2string(sJumpsLeft));
+  assume sJumpsRight ~ Poisson(m.nu * rightTime); //printLn(int2string(sJumpsRight));
 
+  //printLn("(computed) newLeftCharMessage, newRightCharMessage:");
   let newLeftCharMessage = evolveCharacter( leftCharacterMessage
                                           , m
                                           , leftTime
                                           , sJumpsLeft
                                           );
-
   let newRightCharMessage = evolveCharacter ( rightCharacterMessage
                                             , m
                                             , rightTime
                                             , sJumpsRight
                                             );
+  //printMtx(newLeftCharMessage); printMtx(newRightCharMessage);
 
-  printLn("character done");
-
-
+  //printLn("(received) leftMessageSequence, rightMessageSequence:");
   let leftMessageSequence = getMessageSequence(tree.left);
   let rightMessageSequence = getMessageSequence(tree.right);
+  //printMtxSeq(leftMessageSequence); printMtxSeq(rightMessageSequence);
 
+  //printLn("(calculated) newLeftMessageSequence, newRightMessageSequence:");
   let newLeftMessageSequence = evolveMessageSequence(leftMessageSequence, m, leftTime, sJumpsLeft);
   let newRightMessageSequence = evolveMessageSequence(rightMessageSequence, m, rightTime, sJumpsRight);
-
-  printLn("left and right seqs done");
+  //printMtxSeq(newLeftMessageSequence); printMtxSeq(newRightMessageSequence);
 
   // we need to zipWith left and right and element-wise multiply left and right
   // TODO one of the messages may be missing (-1.)
@@ -263,7 +265,7 @@ function coalesceQTTwig(tree: QTTree, m: ModelDynamics, doresample: Bool): QTTre
                                   , newRightMessageSequence 
                                   ); // ~~TODO check zipWith and implement hadamardMul~~
 
-  printLn("seqs have been multiplied");
+  //printLn("seqs have been multiplied");
 
 
   //  Still possible to have missing data after the previous operation
@@ -275,7 +277,7 @@ function coalesceQTTwig(tree: QTTree, m: ModelDynamics, doresample: Bool): QTTre
   
   let partialLogWeight = seqSumReal(logWeightSequence) + logWeightChar;
 
-  printLn("weights done");
+  //printLn("weights done");
 
 
   logWeight (partialLogWeight - tree.partialLogWeight);
@@ -296,11 +298,11 @@ function coalesceQTTwig(tree: QTTree, m: ModelDynamics, doresample: Bool): QTTre
   //         );
 
   if (doresample) {
-    printLn("resampling");
+    //printLn("resampling");
     resample;
   }
 
-  printLn("Tree params:");
+  //printLn("Tree params:");
 
   let newTree = QTWeightedLeaf  { age = tree.age
                                 , messageSequence = newMessageSequence
@@ -308,7 +310,7 @@ function coalesceQTTwig(tree: QTTree, m: ModelDynamics, doresample: Bool): QTTre
                                 , partialLogWeight = partialLogWeight
                                 };
 
-  printLn("coalesce complete");
+  //printLn("coalesce complete");
   return newTree;
 
 }
@@ -417,6 +419,7 @@ function evolveMessageClosure ( dyn: ModelDynamics
   // $$P_mu^(i)(t) = e^(Q t)((1 - p)I + p J)^n$$
   //printLn("let idMtx = mtxCreateId(dim(dyn.jMol)[1]);");
   let idMtx = mtxCreateId(dim(dyn.jMol)[1]);
+  //printMtx(idMtx);
   //printLn("past");
   let res = mes *@ (
                         ( ( ( (1.0 - dyn.p) $* idMtx )  +@ ( dyn.p $* ( dyn.jMol ) ) ) ^$ n) *@ 
@@ -429,9 +432,13 @@ function evolveMessageClosure ( dyn: ModelDynamics
 
 function evolveCharacter(mes: Tensor[Real], m: ModelDynamics, t: Real, sJumps: Int): Tensor[Real]
 {
-  // TODO on top of that we need to add the s-jumps
-  let res = mes *@ ( (m.jChar ^$ sJumps) *@ (mtxExp(m.qChar *$ t)) );
+  // check tensor.tppl for further documentation
+  // *@ : matrix multiplication (dot product)
+  // ^$ : matrix to integer power
+  // *$ : multiplying a matrix with a scalar from the right
+  let res = mes *@ ( (m.jChar ^$ sJumps) *@ (mtxExp(m.qChar *$ t)) ); // res = m * (J^s * exp(Q * t))
   return res;
+  // TODO(vsenderov, 2024-08-01): Using user-defined types are paramter types, a bad design
 }
 
 
@@ -445,12 +452,28 @@ type MessageSequenceEvolution = MessageSequenceEvolution {
 * Using the Q-T-BIRDS model, evolve the messages along a branch of length t
 */
 function evolveMessageSequence( messages: Tensor[Real][]
-                              , m: ModelDynamics
+                              , dyn: ModelDynamics
                               , t: Real
                               , n: Int // number of total sjumps
                               ) : Tensor[Real][]
 {
-  let evolveMessage = evolveMessageClosure(m, t, n); // partial application
+  //let evolveMessage = evolveMessageClosure(m, t, n); // partial application
+  let evolveMessage = function(mes: Tensor[Real]) {
+    // Missing data case - skip the linear algebra if the message is missing
+    let myScalar = mtxGet(1, 1, mes); if (myScalar < 0.) { return mes; }
+
+    // P_mu^(i)(t) = e^(Q t)((1 - p)I + p J)^n
+    let idMtx = mtxCreateId(dim(dyn.jMol)[1]);
+    let pComplTerm = (1.0 - dyn.p) $* idMtx;
+    let pTerm = (dyn.p) $* (dyn.jMol);
+    let jTerm = (pComplTerm +@ pTerm) ^$ n;
+    let qTerm = mtxExp(dyn.qMol *$ t);
+    let res = jTerm *@ qTerm;
+
+//  let res = mes *@ (((((1.0 - dyn.p) $* idMtx) +@ (dyn.p $* (dyn.jMol))) ^$n)  *@ (mtxExp(dyn.qMol *$ t)));
+
+    return res; // Wow, what a bug!  Was return mes!?!
+  };
   let messageSequence = sapply(messages, evolveMessage);
   return messageSequence;
 }
@@ -484,6 +507,17 @@ function computeMessageLogLikelihood(mes: Tensor[Real]): Real
 // ╚███╔███╔╝╚██████╔╝██║  ██║██║  ██╗██║  ██║██║  ██║╚██████╔╝╚██████╔╝██║ ╚████║██████╔╝███████║
 //  ╚══╝╚══╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝╚═════╝ ╚══════╝
 //https://patorjk.com/software/taag/#p=testall&h=1&v=1&f=Univers&t=WORKAROUNDS
+
+function printMtxSeq(x: Tensor[Real][]): () {
+  let n = length(x);
+  for i in 1 to n {
+    printMtx(x[i]);
+    if (Real(i) < Real(n)) { // TODO(vsenderov, 2024-08-01): Integer comparsions ugh
+      printLn("---");
+    }
+  }
+  return;
+}
 
 function getAgeDiff(parent: QTTree, child: QTTree)
 {
